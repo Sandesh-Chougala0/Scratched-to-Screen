@@ -1,48 +1,43 @@
 // ---------------------------------------------------------------------------
-// Global types for Scratched-to-Screen
+// Global types for Scratched-to-Screen (Auto-Detection mode)
 // ---------------------------------------------------------------------------
 
-export type CanvasMode = 'draw' | 'pan';
+export type Algorithm = 'telea' | 'ns';
 
-export type Algorithm = 'telea' | 'navier-stokes';
-
+/** Core application state */
 export interface AppState {
-  /** Original image as a data-URL */
+  /** Original uploaded image as a data-URL */
   image: string | null;
-  /** Binary mask as a data-URL (white strokes on black background) */
-  mask: string | null;
+  /** Auto-generated binary scratch mask returned by the backend */
+  autoMask: string | null;
   /** Whether the API call is in-flight */
   isProcessing: boolean;
   /** Inpainted result as a data-URL */
   restoredImage: string | null;
+  /** Processing time returned by the API (ms) */
+  processingTime: number | null;
 }
 
-export interface InpaintRequest {
+/** POST body sent to /api/auto-inpaint */
+export interface AutoInpaintRequest {
   image_base64: string;
-  mask_base64: string;
+  scratch_sensitivity: number;
   algorithm: Algorithm;
-  radius: number;
 }
 
-export interface InpaintResponse {
+/** Response body from /api/auto-inpaint */
+export interface AutoInpaintResponse {
   restored_image_base64: string;
+  auto_detected_mask_base64: string;
   processing_time_ms: number;
 }
 
+/** Computed image metrics shown in the MetadataCard */
 export interface ImageMetrics {
   width: number;
   height: number;
-  scratchCoveragePercent: number;
+  /** Percentage of mask pixels that are white (detected scratch area) */
+  defectCoveragePercent: number;
   processingTimeMs: number | null;
+  algorithmUsed: string;
 }
-
-export interface StrokePoint {
-  x: number;
-  y: number;
-}
-
-export interface Stroke {
-  points: StrokePoint[];
-  brushSize: number;
-}
-

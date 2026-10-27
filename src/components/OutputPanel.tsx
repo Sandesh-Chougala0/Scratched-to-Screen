@@ -26,6 +26,11 @@ function downloadDataUrl(dataUrl: string, filename: string) {
   a.click();
 }
 
+const ALGO_LABEL: Record<string, string> = {
+  telea: 'Telea',
+  ns: 'Navier-Stokes',
+};
+
 export default function OutputPanel({
   originalImage,
   maskImage,
@@ -47,9 +52,9 @@ export default function OutputPanel({
       tool: 'Scratched-to-Screen',
       version: '0.1.0',
       timestamp: new Date().toISOString(),
-      algorithm,
+      algorithm: metrics.algorithmUsed,
       original_resolution: { width: metrics.width, height: metrics.height },
-      scratch_coverage_percent: metrics.scratchCoveragePercent,
+      defect_coverage_percent: metrics.defectCoveragePercent,
       processing_time_ms: metrics.processingTimeMs,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -62,8 +67,7 @@ export default function OutputPanel({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Tab bar */}
-      <div className="flex overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900">
+      <div className="flex overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/80">
         <button
           onClick={() => setTab('slider')}
           className={`flex flex-1 items-center justify-center gap-2 py-2.5 text-xs font-medium transition ${
@@ -73,7 +77,7 @@ export default function OutputPanel({
           }`}
         >
           <SplitSquareHorizontal className="h-3.5 w-3.5" />
-          Before / After Slider
+          Before / After
         </button>
         <button
           onClick={() => setTab('sidebyside')}
@@ -88,17 +92,21 @@ export default function OutputPanel({
         </button>
       </div>
 
-      {/* Output viewport */}
-      <div className="min-h-[300px] rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+      <div className="min-h-[300px] overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/80">
         {isProcessing ? (
           <div className="flex h-64 flex-col items-center justify-center gap-4">
             <div className="relative h-14 w-14">
               <div className="absolute inset-0 animate-spin rounded-full border-4 border-zinc-700 border-t-indigo-500" />
-              <div className="absolute inset-2 animate-spin rounded-full border-4 border-transparent border-t-violet-400" style={{ animationDirection: 'reverse', animationDuration: '0.8s' }} />
+              <div
+                className="absolute inset-2 animate-spin rounded-full border-4 border-transparent border-t-violet-400"
+                style={{ animationDirection: 'reverse', animationDuration: '0.8s' }}
+              />
             </div>
             <div className="text-center">
               <p className="text-sm font-semibold text-zinc-300">Restoring frame…</p>
-              <p className="text-xs text-zinc-500 mt-1">Applying {algorithm === 'telea' ? 'Telea' : 'Navier-Stokes'} inpainting</p>
+              <p className="mt-1 text-xs text-zinc-500">
+                Detecting defects, then applying {ALGO_LABEL[algorithm] ?? algorithm} inpainting
+              </p>
             </div>
           </div>
         ) : !hasResult ? (
@@ -106,9 +114,8 @@ export default function OutputPanel({
             <div className="rounded-full bg-zinc-800 p-4">
               <SplitSquareHorizontal className="h-8 w-8 text-zinc-600" />
             </div>
-            <p className="text-sm text-zinc-500">
-              Restored output will appear here after you run{' '}
-              <span className="text-indigo-400">⚡ Restore Frame</span>
+            <p className="max-w-xs text-sm text-zinc-500">
+              Load a frame and run <span className="text-indigo-400">Restore Frame</span> to compare the original, mask, and repaired image.
             </p>
           </div>
         ) : tab === 'slider' ? (
@@ -116,7 +123,6 @@ export default function OutputPanel({
             <BeforeAfterSlider before={originalImage} after={restoredImage} />
           </div>
         ) : (
-          /* Side-by-side grid */
           <div className="grid grid-cols-3 gap-2 p-3">
             {[
               { label: 'Original', src: originalImage, accent: 'text-zinc-400' },
@@ -125,11 +131,7 @@ export default function OutputPanel({
             ].map(({ label, src, accent }) => (
               <div key={label} className="overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800">
                 {src ? (
-                  <img
-                    src={src}
-                    alt={label}
-                    className="h-36 w-full object-cover"
-                  />
+                  <img src={src} alt={label} className="h-36 w-full object-contain bg-zinc-950" />
                 ) : (
                   <div className="flex h-36 items-center justify-center">
                     <span className="text-xs text-zinc-600">No mask</span>
@@ -144,23 +146,21 @@ export default function OutputPanel({
         )}
       </div>
 
-      {/* Metadata card */}
       <MetadataCard metrics={metrics} isProcessing={isProcessing} />
 
-      {/* Export actions */}
       <div className="flex gap-3">
         <button
           onClick={handleDownloadRestored}
           disabled={!restoredImage}
-          className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Download className="h-4 w-4" />
-          Download Restored (PNG)
+          Download PNG
         </button>
         <button
           onClick={handleExportMetadata}
           disabled={!metrics || metrics.processingTimeMs === null}
-          className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex items-center gap-2 rounded-xl border border-zinc-700 bg-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
         >
           <FileJson className="h-4 w-4" />
           Export JSON
@@ -169,4 +169,3 @@ export default function OutputPanel({
     </div>
   );
 }
-

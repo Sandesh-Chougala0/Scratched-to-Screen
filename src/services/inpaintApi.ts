@@ -1,103 +1,226 @@
 // ---------------------------------------------------------------------------
-// API service — real call with mock fallback
+// Auto-Inpaint API service — real call with mock fallback
 // ---------------------------------------------------------------------------
 
-import type { InpaintRequest, InpaintResponse } from '../types';
+import type { AutoInpaintRequest, AutoInpaintResponse } from '../types';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = '';
 
-/**
- * Applies a subtle sepia + noise filter to simulate restored film grain.
- * Returns a data-URL.
- */
-function generateMockRestoredImage(imageDataUrl: string): Promise<string> {
-  return new Promise((resolve) => {
+function luminance(r: number, g: number, b: number) {
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+function morphOpenVertical(
+  gray: Float32Array,
+  width: number,
+  height: number,
+  kernelHeight: number
+): Float32Array {
+  const half = Math.floor(kernelHeight / 2);
+  const eroded = new Float32Array(width * height);
+  const opened = new Float32Array(width * height);
+
+  for (let x = 0; x < width; x++) {
+    for (let y = 0; y < height; y++) {
+      let minv = 255;
+      for (let dy = -half; dy <= half; dy++) {
+        const yy = Math.min(height - 1, Math.max(0, y + dy));
+        minv = Math.min(minv, gray[yy * width + x]);
+      }
+      eroded[y * width + x] = minv;
+    }
+  }
+
+  for (let x = 0; x < width; x++) {
+    for (let y = 0; y < height; y++) {
+      let maxv = 0;
+      for (let dy = -half; dy <= half; dy++) {
+        const yy = Math.min(height - 1, Math.max(0, y + dy));
+        maxv = Math.max(maxv, eroded[yy * width + x]);
+      }
+      opened[y * width + x] = maxv;
+    }
+  }
+
+  return opened;
+}
+
+function dilate3x3(mask: Uint8ClampedArray, width: number, height: number): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(mask.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let hit = 0;
+      for (let dy = -1; dy <= 1 && !hit; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          const yy = y + dy;
+          if (xx < 0 || yy < 0 || xx >= width || yy >= height) continue;
+          if (mask[yy * width + xx]) {
+            hit = 1;
+            break;
+          }
+        }
+      }
+      out[y * width + x] = hit ? 255 : 0;
+    }
+  }
+  return out;
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext('2d')!;
-
-      // Draw original
-      ctx.drawImage(img, 0, 0);
-
-      // Slight brightness boost (simulate restoration)
-      ctx.globalCompositeOperation = 'screen';
-      ctx.fillStyle = 'rgba(30, 20, 10, 0.08)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.globalCompositeOperation = 'source-over';
-
-      // Simulate scratch removal — paint masked areas with blurred surrounding color
-      // by adding a translucent warm overlay where mask is white
-      ctx.globalCompositeOperation = 'multiply';
-      ctx.fillStyle = 'rgba(255, 248, 235, 0.15)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.globalCompositeOperation = 'source-over';
-
-      resolve(canvas.toDataURL('image/png'));
-    };
-    img.src = imageDataUrl;
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to decode image'));
+    img.src = src;
   });
 }
 
-export async function callInpaintAPI(request: InpaintRequest): Promise<InpaintResponse> {
-  const startTime = performance.now();
+/**
+ * Client-side stand-in for the Python morphological scratch detector.
+ */
+async function generateMockMask(imageDataUrl: string, sensitivity: number): Promise<string> {
+  const img = await loadImage(imageDataUrl);
+  const src = document.createElement('canvas');
+  src.width = img.naturalWidth;
+  src.height = img.naturalHeight;
+  const srcCtx = src.getContext('2d')!;
+  srcCtx.drawImage(img, 0, 0);
+  const { data, width, height } = srcCtx.getImageData(0, 0, src.width, src.height);
 
-  try {
-    const response = await fetch(`${API_BASE}/api/inpaint`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-      signal: AbortSignal.timeout(30_000),
-    });
-
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status} ${response.statusText}`);
-    }
-
-    const data = (await response.json()) as InpaintResponse;
-    return data;
-  } catch {
-    // ── Mock fallback ──────────────────────────────────────────────────────
-    console.info('[Scratched-to-Screen] Backend not reachable — using mock fallback.');
-
-    // Simulate processing latency
-    const simulatedDelay = request.algorithm === 'navier-stokes' ? 1800 : 900;
-    await new Promise((r) => setTimeout(r, simulatedDelay));
-
-    const restoredDataUrl = await generateMockRestoredImage(request.image_base64);
-    const processingTime = Math.round(performance.now() - startTime);
-
-    return {
-      restored_image_base64: restoredDataUrl,
-      processing_time_ms: processingTime,
-    };
+  const gray = new Float32Array(width * height);
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    gray[p] = luminance(data[i], data[i + 1], data[i + 2]);
   }
+
+  const opened = morphOpenVertical(gray, width, height, 15);
+  const binary = new Uint8ClampedArray(width * height);
+  const cutoff = Math.max(4, Math.min(80, sensitivity));
+
+  for (let p = 0; p < gray.length; p++) {
+    binary[p] = Math.abs(gray[p] - opened[p]) > cutoff ? 255 : 0;
+  }
+
+  const dilated = dilate3x3(binary, width, height);
+
+  const out = document.createElement('canvas');
+  out.width = width;
+  out.height = height;
+  const outCtx = out.getContext('2d')!;
+  const outImg = outCtx.createImageData(width, height);
+  for (let p = 0, i = 0; p < dilated.length; p++, i += 4) {
+    const v = dilated[p];
+    outImg.data[i] = v;
+    outImg.data[i + 1] = v;
+    outImg.data[i + 2] = v;
+    outImg.data[i + 3] = 255;
+  }
+  outCtx.putImageData(outImg, 0, 0);
+  return out.toDataURL('image/png');
 }
 
 /**
- * Computes what percentage of the mask canvas is white (painted area).
+ * Simulate inpainting: blur the source and composite it where the mask is white.
  */
-export function computeScratchCoverage(maskDataUrl: string): Promise<number> {
+async function generateMockRestored(imageDataUrl: string, maskDataUrl: string): Promise<string> {
+  const [img, maskImg] = await Promise.all([loadImage(imageDataUrl), loadImage(maskDataUrl)]);
+  const width = img.naturalWidth;
+  const height = img.naturalHeight;
+
+  const src = document.createElement('canvas');
+  src.width = width;
+  src.height = height;
+  const srcCtx = src.getContext('2d')!;
+  srcCtx.drawImage(img, 0, 0);
+
+  const blurred = document.createElement('canvas');
+  blurred.width = width;
+  blurred.height = height;
+  const blurCtx = blurred.getContext('2d')!;
+  blurCtx.filter = 'blur(6px)';
+  blurCtx.drawImage(img, 0, 0);
+
+  const mask = document.createElement('canvas');
+  mask.width = width;
+  mask.height = height;
+  const maskCtx = mask.getContext('2d')!;
+  maskCtx.drawImage(maskImg, 0, 0, width, height);
+
+  const srcData = srcCtx.getImageData(0, 0, width, height);
+  const blurData = blurCtx.getImageData(0, 0, width, height);
+  const maskData = maskCtx.getImageData(0, 0, width, height);
+
+  for (let i = 0; i < srcData.data.length; i += 4) {
+    const t = maskData.data[i] / 255;
+    if (t <= 0) continue;
+    srcData.data[i] = srcData.data[i] * (1 - t) + blurData.data[i] * t;
+    srcData.data[i + 1] = srcData.data[i + 1] * (1 - t) + blurData.data[i + 1] * t;
+    srcData.data[i + 2] = srcData.data[i + 2] * (1 - t) + blurData.data[i + 2] * t;
+  }
+
+  srcCtx.putImageData(srcData, 0, 0);
+  return src.toDataURL('image/png');
+}
+
+export function computeDefectCoverage(maskDataUrl: string): Promise<number> {
   return new Promise((resolve) => {
     if (!maskDataUrl) return resolve(0);
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
       const ctx = canvas.getContext('2d')!;
       ctx.drawImage(img, 0, 0);
       const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
       let whitePixels = 0;
       for (let i = 0; i < data.length; i += 4) {
-        // Count pixels where R > 200 (white-ish region on black mask)
         if (data[i] > 200) whitePixels++;
       }
-      const total = (data.length / 4);
-      resolve(parseFloat(((whitePixels / total) * 100).toFixed(2)));
+      resolve(parseFloat(((whitePixels / (data.length / 4)) * 100).toFixed(2)));
     };
+    img.onerror = () => resolve(0);
     img.src = maskDataUrl;
   });
+}
+
+/** UI 5 (subtle) → high OpenCV threshold; UI 50 (deep) → low threshold. */
+function toDetectionThreshold(sensitivity: number): number {
+  return Math.max(1, Math.min(80, 55 - sensitivity));
+}
+
+export async function callAutoInpaintAPI(
+  request: AutoInpaintRequest
+): Promise<AutoInpaintResponse> {
+  const startTime = performance.now();
+  const payload: AutoInpaintRequest = {
+    ...request,
+    scratch_sensitivity: toDetectionThreshold(request.scratch_sensitivity),
+  };
+
+  try {
+    const res = await fetch(`${API_BASE}/api/auto-inpaint`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(45_000),
+    });
+
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    return (await res.json()) as AutoInpaintResponse;
+  } catch {
+    console.info('[Scratched-to-Screen] Backend offline — using mock fallback.');
+
+    const delay = payload.algorithm === 'ns' ? 1600 : 900;
+    await new Promise((r) => setTimeout(r, delay));
+
+    const mask = await generateMockMask(payload.image_base64, payload.scratch_sensitivity);
+    const restored = await generateMockRestored(payload.image_base64, mask);
+
+    return {
+      restored_image_base64: restored,
+      auto_detected_mask_base64: mask,
+      processing_time_ms: Math.round(performance.now() - startTime),
+    };
+  }
 }

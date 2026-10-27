@@ -28,14 +28,13 @@
 }
 
 @layer components {
-  .canvas-cursor-draw {
-    cursor: crosshair;
-  }
-  .canvas-cursor-pan {
-    cursor: grab;
-  }
-  .canvas-cursor-pan:active {
-    cursor: grabbing;
+  .film-sprockets {
+    background-image: repeating-linear-gradient(
+      to bottom,
+      transparent 0 10px,
+      rgb(24 24 27) 10px 18px,
+      transparent 18px 28px
+    );
   }
 }
 

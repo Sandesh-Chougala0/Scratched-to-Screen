@@ -6,8 +6,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { SplitSquareHorizontal } from 'lucide-react';
 
 interface BeforeAfterSliderProps {
-  before: string; // original image data-URL
-  after: string;  // restored image data-URL
+  before: string;
+  after: string;
 }
 
 export default function BeforeAfterSlider({ before, after }: BeforeAfterSliderProps) {
@@ -23,29 +23,42 @@ export default function BeforeAfterSlider({ before, after }: BeforeAfterSliderPr
     setSplitPct(pct);
   }, []);
 
-  const onMouseMove = useCallback(
-    (e: MouseEvent) => { if (isDragging.current) updateSplit(e.clientX); },
-    [updateSplit]
-  );
-  const onMouseUp = useCallback(() => { isDragging.current = false; }, []);
+  const stopDrag = useCallback(() => {
+    isDragging.current = false;
+  }, []);
 
   useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (isDragging.current) updateSplit(e.clientX);
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (isDragging.current && e.touches[0]) updateSplit(e.touches[0].clientX);
+    };
     window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('mouseup', stopDrag);
+    window.addEventListener('touchmove', onTouchMove, { passive: true });
+    window.addEventListener('touchend', stopDrag);
     return () => {
       window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('mouseup', stopDrag);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', stopDrag);
     };
-  }, [onMouseMove, onMouseUp]);
+  }, [updateSplit, stopDrag]);
 
   return (
     <div
       ref={containerRef}
-      className="relative select-none overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 cursor-col-resize"
-      onMouseDown={(e) => { isDragging.current = true; updateSplit(e.clientX); }}
-      onTouchMove={(e) => updateSplit(e.touches[0].clientX)}
+      className="relative cursor-col-resize select-none overflow-hidden rounded-xl border border-zinc-700 bg-zinc-950"
+      onMouseDown={(e) => {
+        isDragging.current = true;
+        updateSplit(e.clientX);
+      }}
+      onTouchStart={(e) => {
+        isDragging.current = true;
+        if (e.touches[0]) updateSplit(e.touches[0].clientX);
+      }}
     >
-      {/* "After" (restored) — full width base */}
       <img
         src={after}
         alt="Restored"
@@ -53,43 +66,38 @@ export default function BeforeAfterSlider({ before, after }: BeforeAfterSliderPr
         className="block h-full max-h-[480px] w-full object-contain"
       />
 
-      {/* "Before" (original) — clipped to left of divider */}
       <div
         className="absolute inset-0 overflow-hidden"
-        style={{ width: `${splitPct}%` }}
+        style={{ clipPath: `inset(0 ${100 - splitPct}% 0 0)` }}
       >
         <img
           src={before}
           alt="Original"
           draggable={false}
           className="h-full w-full object-contain"
-          style={{ minWidth: `${10000 / splitPct}%` }}
         />
       </div>
 
-      {/* Divider line */}
       <div
         className="absolute inset-y-0 z-10 flex flex-col items-center"
         style={{ left: `${splitPct}%`, transform: 'translateX(-50%)' }}
       >
-        <div className="h-full w-0.5 bg-white/80 shadow-xl" />
-        <div className="absolute top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border-2 border-white bg-white shadow-xl">
+        <div className="h-full w-0.5 bg-white/85 shadow-[0_0_12px_rgba(255,255,255,0.5)]" />
+        <div className="absolute top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border-2 border-white bg-white shadow-xl">
           <SplitSquareHorizontal className="h-4 w-4 text-zinc-900" />
         </div>
       </div>
 
-      {/* Labels */}
       <div className="pointer-events-none absolute bottom-3 left-3">
-        <span className="rounded bg-zinc-900/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 backdrop-blur-sm">
+        <span className="rounded-md bg-zinc-950/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-300 backdrop-blur-sm">
           Before
         </span>
       </div>
       <div className="pointer-events-none absolute bottom-3 right-3">
-        <span className="rounded bg-indigo-600/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-white backdrop-blur-sm">
+        <span className="rounded-md bg-indigo-600/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-white backdrop-blur-sm">
           After
         </span>
       </div>
     </div>
   );
 }
-

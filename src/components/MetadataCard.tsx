@@ -2,7 +2,7 @@
 // MetadataCard — image info and metrics display
 // ---------------------------------------------------------------------------
 
-import { Activity, Clock, Image as ImageIcon, Scan } from 'lucide-react';
+import { Activity, Clock, Image as ImageIcon, Scan, WandSparkles } from 'lucide-react';
 import type { ImageMetrics } from '../types';
 
 interface MetadataCardProps {
@@ -55,8 +55,8 @@ export default function MetadataCard({ metrics, isProcessing }: MetadataCardProp
         />
         <MetricRow
           icon={<Scan className="h-4 w-4" />}
-          label="Scratch Area Coverage"
-          value={`${metrics.scratchCoveragePercent.toFixed(2)} %`}
+          label="Detected Defect Coverage"
+          value={`${metrics.defectCoveragePercent.toFixed(2)} %`}
         />
         <MetricRow
           icon={<Clock className="h-4 w-4" />}
@@ -65,9 +65,14 @@ export default function MetadataCard({ metrics, isProcessing }: MetadataCardProp
             isProcessing
               ? 'Processing…'
               : metrics.processingTimeMs !== null
-              ? `${metrics.processingTimeMs} ms`
+              ? `${Math.round(metrics.processingTimeMs)} ms`
               : '—'
           }
+        />
+        <MetricRow
+          icon={<WandSparkles className="h-4 w-4" />}
+          label="Algorithm"
+          value={metrics.algorithmUsed || '—'}
         />
       </div>
     </div>

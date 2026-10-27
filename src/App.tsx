@@ -1,207 +1,186 @@
 // ---------------------------------------------------------------------------
-// App.tsx — root component wiring all pieces together
+// App.tsx — auto-detect scratches and restore the frame
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Zap } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { Sparkles } from 'lucide-react';
 
 import Header from './components/Header';
-import CanvasToolbar from './components/CanvasToolbar';
+import AutoControlsToolbar from './components/AutoControlsToolbar';
 import DropZone from './components/DropZone';
 import ImageCanvas from './components/ImageCanvas';
 import OutputPanel from './components/OutputPanel';
 
-import { useCanvasDrawing } from './hooks/useCanvasDrawing';
-import { callInpaintAPI, computeScratchCoverage } from './services/inpaintApi';
+import { callAutoInpaintAPI, computeDefectCoverage } from './services/inpaintApi';
 
-import type { Algorithm, CanvasMode, ImageMetrics } from './types';
+import type { Algorithm, ImageMetrics } from './types';
+
+const ALGO_LABEL: Record<Algorithm, string> = {
+  telea: 'Telea',
+  ns: 'Navier-Stokes',
+};
 
 export default function App() {
-  // ── Image state ──────────────────────────────────────────────────────────
   const [image, setImage] = useState<string | null>(null);
-  const [mask, setMask] = useState<string | null>(null);
+  const [autoMask, setAutoMask] = useState<string | null>(null);
   const [restoredImage, setRestoredImage] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // ── Canvas controls ───────────────────────────────────────────────────────
-  const [canvasMode, setCanvasMode] = useState<CanvasMode>('draw');
-  const [brushSize, setBrushSize] = useState(12);
+  const [sensitivity, setSensitivity] = useState(18);
   const [algorithm, setAlgorithm] = useState<Algorithm>('telea');
+  const [showMaskOverlay, setShowMaskOverlay] = useState(true);
 
-  // ── Metrics ───────────────────────────────────────────────────────────────
   const [metrics, setMetrics] = useState<ImageMetrics | null>(null);
-  const imageDimensions = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [staleControls, setStaleControls] = useState(false);
 
-  // ── Drawing hook ──────────────────────────────────────────────────────────
-  const drawing = useCanvasDrawing({
-    mode: canvasMode,
-    brushSize,
-    imageLoaded: !!image,
-  });
-
-  // Load image dimensions when image changes
-  useEffect(() => {
-    if (!image) { imageDimensions.current = { width: 0, height: 0 }; return; }
+  const handleImageLoaded = useCallback((dataUrl: string) => {
     const img = new Image();
     img.onload = () => {
-      imageDimensions.current = { width: img.naturalWidth, height: img.naturalHeight };
+      setImage(dataUrl);
+      setAutoMask(null);
+      setRestoredImage(null);
+      setError(null);
+      setStaleControls(false);
       setMetrics({
         width: img.naturalWidth,
         height: img.naturalHeight,
-        scratchCoveragePercent: 0,
+        defectCoveragePercent: 0,
         processingTimeMs: null,
+        algorithmUsed: ALGO_LABEL[algorithm],
       });
     };
-    img.src = image;
-  }, [image]);
-
-  // Update scratch coverage whenever strokes change
-  useEffect(() => {
-    if (!image || drawing.strokes.length === 0) return;
-    const { width, height } = imageDimensions.current;
-    if (!width || !height) return;
-    const maskDataUrl = drawing.exportMask(width, height);
-    computeScratchCoverage(maskDataUrl).then((pct) => {
-      setMetrics((m) =>
-        m ? { ...m, scratchCoveragePercent: pct } : null
-      );
-    });
-  }, [drawing.strokes, image, drawing]);
-
-  // ── Handlers ──────────────────────────────────────────────────────────────
-
-  const handleImageLoaded = useCallback((dataUrl: string) => {
-    setImage(dataUrl);
-    setMask(null);
-    setRestoredImage(null);
-    drawing.clearMask();
-  }, [drawing]);
+    img.src = dataUrl;
+  }, [algorithm]);
 
   const handleResetImage = useCallback(() => {
     setImage(null);
-    setMask(null);
+    setAutoMask(null);
     setRestoredImage(null);
     setMetrics(null);
-    drawing.clearMask();
-  }, [drawing]);
+    setError(null);
+    setStaleControls(false);
+  }, []);
+
+  const handleSensitivityChange = useCallback((v: number) => {
+    setSensitivity(v);
+    if (restoredImage) setStaleControls(true);
+  }, [restoredImage]);
+
+  const handleAlgorithmChange = useCallback((a: Algorithm) => {
+    setAlgorithm(a);
+    if (restoredImage) setStaleControls(true);
+  }, [restoredImage]);
 
   const handleRestoreFrame = useCallback(async () => {
     if (!image) return;
-    const { width, height } = imageDimensions.current;
-    const maskDataUrl = drawing.exportMask(width || 800, height || 600);
-    setMask(maskDataUrl);
     setIsProcessing(true);
+    setError(null);
 
     try {
-      const result = await callInpaintAPI({
+      const result = await callAutoInpaintAPI({
         image_base64: image,
-        mask_base64: maskDataUrl,
+        scratch_sensitivity: sensitivity,
         algorithm,
-        radius: Math.ceil(brushSize / 2),
       });
 
+      setAutoMask(result.auto_detected_mask_base64);
       setRestoredImage(result.restored_image_base64);
-      const coverage = await computeScratchCoverage(maskDataUrl);
+      setStaleControls(false);
+
+      const coverage = await computeDefectCoverage(result.auto_detected_mask_base64);
       setMetrics((m) =>
         m
-          ? { ...m, scratchCoveragePercent: coverage, processingTimeMs: result.processing_time_ms }
+          ? {
+              ...m,
+              defectCoveragePercent: coverage,
+              processingTimeMs: result.processing_time_ms,
+              algorithmUsed: ALGO_LABEL[algorithm],
+            }
           : null
       );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Restoration failed. Please try again.');
     } finally {
       setIsProcessing(false);
     }
-  }, [image, drawing, algorithm, brushSize]);
-
-  // ── Render ────────────────────────────────────────────────────────────────
+  }, [image, sensitivity, algorithm]);
 
   return (
-    <div className="flex min-h-screen flex-col bg-zinc-950">
+    <div className="relative flex min-h-screen flex-col overflow-hidden bg-zinc-950">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,#1e1b4b_0%,transparent_45%),radial-gradient(ellipse_at_bottom_right,#3b0764_0%,transparent_40%)] opacity-40" />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:48px_48px] [mask-image:radial-gradient(ellipse_at_center,black,transparent_75%)]" />
+
       <Header />
 
-      <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col gap-6 p-4 md:p-6 lg:flex-row lg:items-start">
-        {/* ── LEFT COLUMN ── */}
+      <main className="relative mx-auto flex w-full max-w-screen-2xl flex-1 flex-col gap-6 p-4 md:p-6 lg:flex-row lg:items-start">
         <div className="flex flex-1 flex-col gap-4 lg:max-w-[58%]">
-          {/* Canvas toolbar */}
-          {image && (
-            <CanvasToolbar
-              mode={canvasMode}
-              brushSize={brushSize}
-              strokeCount={drawing.strokes.length}
-              onModeChange={setCanvasMode}
-              onBrushSizeChange={setBrushSize}
-              onClearMask={drawing.clearMask}
-              onUndo={drawing.undoLastStroke}
-              onResetImage={handleResetImage}
-            />
-          )}
+          <div className="flex flex-wrap items-center gap-2 text-[11px] font-medium uppercase tracking-widest text-zinc-500">
+            <span className={`rounded-full px-2.5 py-1 ${image ? 'bg-indigo-500/15 text-indigo-300' : 'bg-zinc-800 text-zinc-400'}`}>
+              1 · Load frame
+            </span>
+            <span className="text-zinc-700">→</span>
+            <span className={`rounded-full px-2.5 py-1 ${image ? 'bg-indigo-500/15 text-indigo-300' : 'bg-zinc-800/60 text-zinc-600'}`}>
+              2 · Detect
+            </span>
+            <span className="text-zinc-700">→</span>
+            <span className={`rounded-full px-2.5 py-1 ${restoredImage ? 'bg-emerald-500/15 text-emerald-300' : 'bg-zinc-800/60 text-zinc-600'}`}>
+              3 · Restore
+            </span>
+          </div>
 
-          {/* Canvas / Dropzone */}
+          <AutoControlsToolbar
+            sensitivity={sensitivity}
+            algorithm={algorithm}
+            showMaskOverlay={showMaskOverlay}
+            hasImage={!!image}
+            onSensitivityChange={handleSensitivityChange}
+            onAlgorithmChange={handleAlgorithmChange}
+            onToggleMaskOverlay={() => setShowMaskOverlay((v) => !v)}
+            onResetImage={handleResetImage}
+          />
+
           <div className="flex-1">
             {image ? (
               <ImageCanvas
                 imageDataUrl={image}
-                mode={canvasMode}
-                brushSize={brushSize}
-                strokes={drawing.strokes}
-                maskCanvasRef={drawing.maskCanvasRef}
-                onMouseDown={drawing.onMouseDown}
-                onMouseMove={drawing.onMouseMove}
-                onMouseUp={drawing.onMouseUp}
-                onMouseLeave={drawing.onMouseLeave}
-                onTouchStart={drawing.onTouchStart}
-                onTouchMove={drawing.onTouchMove}
-                onTouchEnd={drawing.onTouchEnd}
+                maskDataUrl={autoMask}
+                showMaskOverlay={showMaskOverlay}
               />
             ) : (
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900">
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 shadow-xl shadow-black/40 backdrop-blur-sm">
                 <DropZone onImageLoaded={handleImageLoaded} />
               </div>
             )}
           </div>
 
-          {/* Bottom action bar */}
+          {error && (
+            <p className="rounded-xl border border-red-800/50 bg-red-950/40 px-4 py-2.5 text-sm text-red-300">
+              {error}
+            </p>
+          )}
+
           {image && (
-            <div className="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900 p-3">
-              {/* Algorithm selector */}
-              <div className="flex flex-col gap-0.5">
-                <label className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-                  Algorithm
-                </label>
-                <select
-                  value={algorithm}
-                  onChange={(e) => setAlgorithm(e.target.value as Algorithm)}
-                  className="rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-xs font-medium text-zinc-300 focus:border-indigo-500 focus:outline-none"
-                >
-                  <option value="telea">Telea (Fast)</option>
-                  <option value="navier-stokes">Navier-Stokes (Smooth)</option>
-                </select>
+            <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/80 p-3 shadow-lg shadow-black/20 backdrop-blur-sm">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-zinc-100">Auto-restore this frame</p>
+                <p className="text-xs text-zinc-500">
+                  {staleControls
+                    ? 'Settings changed — run restore again to refresh the mask and output.'
+                    : autoMask
+                    ? 'Scratches detected. Toggle the overlay to inspect the mask.'
+                    : 'Detects vertical scratches, dust, and tears, then inpaints them.'}
+                </p>
               </div>
 
-              {/* Stroke count pill */}
-              <div className="flex flex-col gap-0.5">
-                <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-                  Mask Strokes
-                </span>
-                <span className="text-sm font-bold text-zinc-300">
-                  {drawing.strokes.length}
-                  <span className="ml-1 text-xs font-normal text-zinc-600">painted</span>
-                </span>
-              </div>
-
-              {/* Spacer */}
-              <div className="flex-1" />
-
-              {/* Restore button */}
               <button
                 onClick={handleRestoreFrame}
-                disabled={isProcessing || drawing.strokes.length === 0}
+                disabled={isProcessing}
                 className={`
-                  flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-bold text-white shadow-lg transition
+                  flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-white shadow-lg transition
                   ${isProcessing
-                    ? 'cursor-not-allowed bg-indigo-700/60'
-                    : drawing.strokes.length === 0
-                    ? 'cursor-not-allowed bg-zinc-700 opacity-50'
-                    : 'bg-gradient-to-r from-indigo-600 to-violet-600 shadow-indigo-900/50 hover:from-indigo-500 hover:to-violet-500 hover:shadow-indigo-700/40'}
+                    ? 'cursor-wait bg-indigo-700/70'
+                    : 'bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 shadow-indigo-950/50 hover:brightness-110'}
                 `}
               >
                 {isProcessing ? (
@@ -211,7 +190,7 @@ export default function App() {
                   </>
                 ) : (
                   <>
-                    <Zap className="h-4 w-4" />
+                    <Sparkles className="h-4 w-4" />
                     Restore Frame
                   </>
                 )}
@@ -220,12 +199,11 @@ export default function App() {
           )}
         </div>
 
-        {/* ── RIGHT COLUMN ── */}
         <div className="flex w-full flex-col gap-4 lg:w-[42%]">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-zinc-400">Output & Comparison</h2>
+            <h2 className="text-sm font-semibold text-zinc-300">Output & comparison</h2>
             {restoredImage && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-400 border border-emerald-500/20">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-400">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
                 Restored
               </span>
@@ -234,7 +212,7 @@ export default function App() {
 
           <OutputPanel
             originalImage={image}
-            maskImage={mask}
+            maskImage={autoMask}
             restoredImage={restoredImage}
             metrics={metrics}
             isProcessing={isProcessing}
@@ -243,14 +221,17 @@ export default function App() {
         </div>
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-zinc-800/60 py-4 text-center text-xs text-zinc-600">
+      <footer className="relative border-t border-zinc-800/60 py-4 text-center text-xs text-zinc-600">
         Scratched-to-Screen · Open Source · Hacktoberfest 2026 ·{' '}
-        <a href="https://github.com" className="text-zinc-500 hover:text-zinc-300">
+        <a
+          href="https://github.com/Sandesh-Chougala0/Scratched-to-Screen"
+          className="text-zinc-500 transition hover:text-zinc-300"
+          target="_blank"
+          rel="noreferrer"
+        >
           Contribute on GitHub
         </a>
       </footer>
     </div>
   );
 }
-

@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// DropZone — file upload / demo selector when no image is loaded
+// DropZone — file upload + historical demo image selector
 // ---------------------------------------------------------------------------
 
 import { useCallback, useRef, useState } from 'react';
@@ -9,11 +9,23 @@ interface DropZoneProps {
   onImageLoaded: (dataUrl: string) => void;
 }
 
-// A small palette of "demo" archival images using picsum
+// Historical / archival-looking demo images (greyscale/sepia tones via picsum)
 const DEMO_IMAGES = [
-  { label: 'Film Still #1', url: 'https://picsum.photos/seed/film1/800/600' },
-  { label: 'Film Still #2', url: 'https://picsum.photos/seed/vintage2/800/600' },
-  { label: 'Portrait #3',   url: 'https://picsum.photos/seed/portrait3/800/600' },
+  {
+    label: 'Archival Still A',
+    url: 'https://picsum.photos/seed/archival1/800/600?grayscale',
+    thumb: 'https://picsum.photos/seed/archival1/120/80?grayscale',
+  },
+  {
+    label: 'Archival Still B',
+    url: 'https://picsum.photos/seed/vintage42/800/600?grayscale',
+    thumb: 'https://picsum.photos/seed/vintage42/120/80?grayscale',
+  },
+  {
+    label: 'Film Portrait C',
+    url: 'https://picsum.photos/seed/portrait77/800/600?grayscale',
+    thumb: 'https://picsum.photos/seed/portrait77/120/80?grayscale',
+  },
 ];
 
 async function urlToDataUrl(url: string): Promise<string> {
@@ -65,7 +77,7 @@ export default function DropZone({ onImageLoaded }: DropZoneProps) {
         const dataUrl = await urlToDataUrl(url);
         onImageLoaded(dataUrl);
       } catch {
-        setError('Failed to load demo image. Check your internet connection.');
+        setError('Failed to load demo image. Check your connection.');
       } finally {
         setLoadingDemo(null);
       }
@@ -74,16 +86,16 @@ export default function DropZone({ onImageLoaded }: DropZoneProps) {
   );
 
   return (
-    <div className="flex h-full min-h-[340px] flex-col items-center justify-center gap-6 p-6">
-      {/* Main drop area */}
+    <div className="flex h-full min-h-[400px] flex-col items-center justify-center gap-5 p-6">
+      {/* Drop area */}
       <div
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={onDrop}
         onClick={() => inputRef.current?.click()}
         className={`
-          flex w-full flex-1 cursor-pointer flex-col items-center justify-center gap-4
-          rounded-2xl border-2 border-dashed transition-all duration-200
+          flex w-full flex-1 min-h-[200px] cursor-pointer flex-col items-center justify-center gap-4
+          rounded-2xl border-2 border-dashed transition-all duration-200 px-4
           ${isDragging
             ? 'border-indigo-400 bg-indigo-500/10 shadow-lg shadow-indigo-900/20'
             : 'border-zinc-700 bg-zinc-900/50 hover:border-zinc-500 hover:bg-zinc-800/50'}
@@ -92,12 +104,15 @@ export default function DropZone({ onImageLoaded }: DropZoneProps) {
         <div className={`rounded-full p-4 transition-colors ${isDragging ? 'bg-indigo-500/20' : 'bg-zinc-800'}`}>
           <UploadCloud className={`h-10 w-10 transition-colors ${isDragging ? 'text-indigo-400' : 'text-zinc-500'}`} />
         </div>
-        <div className="text-center">
+        <div className="text-center px-4">
           <p className="font-semibold text-zinc-300">
-            {isDragging ? 'Drop to upload' : 'Drop your archival image here'}
+            {isDragging ? 'Drop to upload' : 'Drop your damaged archival frame here'}
           </p>
           <p className="mt-1 text-sm text-zinc-500">
             or <span className="text-indigo-400 underline underline-offset-2">click to browse</span> · PNG / JPG
+          </p>
+          <p className="mt-3 text-xs text-zinc-600">
+            The tool will automatically detect scratches, dust, and film defects.
           </p>
         </div>
         <input
@@ -108,39 +123,39 @@ export default function DropZone({ onImageLoaded }: DropZoneProps) {
           onChange={(e) => {
             const file = e.target.files?.[0];
             if (file) handleFile(file);
+            e.target.value = '';
           }}
         />
       </div>
 
-      {/* Error */}
       {error && (
-        <p className="rounded-lg bg-red-900/30 px-4 py-2 text-sm text-red-400 border border-red-800/50">
+        <p className="w-full rounded-lg border border-red-800/50 bg-red-900/30 px-4 py-2 text-sm text-red-400">
           {error}
         </p>
       )}
 
-      {/* Demo selector */}
+      {/* Demo images */}
       <div className="w-full">
         <p className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-zinc-500">
           <ImagePlus className="h-3.5 w-3.5" />
-          Or try a demo image
+          Or try a sample archival image
         </p>
         <div className="grid grid-cols-3 gap-2">
-          {DEMO_IMAGES.map(({ label, url }) => (
+          {DEMO_IMAGES.map(({ label, url, thumb }) => (
             <button
               key={label}
               onClick={() => loadDemo(label, url)}
               disabled={loadingDemo !== null}
-              className="group relative overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 transition hover:border-indigo-500 hover:ring-1 hover:ring-indigo-500/50 disabled:opacity-50"
+              className="group relative overflow-hidden rounded-xl border border-zinc-700 bg-zinc-800 transition hover:border-indigo-500 hover:ring-1 hover:ring-indigo-500/40 disabled:opacity-50"
             >
               <img
-                src={url}
+                src={thumb}
                 alt={label}
-                className="h-16 w-full object-cover opacity-60 transition group-hover:opacity-80"
                 loading="lazy"
+                className="h-20 w-full object-cover opacity-60 transition group-hover:opacity-90 group-hover:scale-105 duration-300"
               />
-              <div className="absolute inset-0 flex items-end bg-gradient-to-t from-zinc-900/80 to-transparent p-1.5">
-                <span className="text-[10px] font-medium text-zinc-300">
+              <div className="absolute inset-0 flex items-end bg-gradient-to-t from-zinc-900/80 to-transparent p-2">
+                <span className="text-[10px] font-medium leading-tight text-zinc-200">
                   {loadingDemo === label ? 'Loading…' : label}
                 </span>
               </div>
@@ -151,4 +166,3 @@ export default function DropZone({ onImageLoaded }: DropZoneProps) {
     </div>
   );
 }
-
